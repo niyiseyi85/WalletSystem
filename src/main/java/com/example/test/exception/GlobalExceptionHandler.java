@@ -44,7 +44,6 @@ public class GlobalExceptionHandler {
             ConstraintViolationException ex) {
         Map<String, String> errors = new HashMap<>();
         ex.getConstraintViolations().forEach(cv -> {
-            // path is e.g. "getTransactionHistory.page" — take only the last segment
             String field = cv.getPropertyPath().toString();
             int dot = field.lastIndexOf('.');
             errors.put(dot >= 0 ? field.substring(dot + 1) : field,

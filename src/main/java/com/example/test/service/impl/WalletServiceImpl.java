@@ -2,14 +2,11 @@ package com.example.test.service.impl;
 
 import com.example.test.dto.request.CreateUserRequest;
 import com.example.test.dto.request.TransferRequest;
+import com.example.test.dto.response.ApiResponse;
 import com.example.test.dto.response.PagedResponse;
 import com.example.test.dto.response.TransactionRecordResponse;
 import com.example.test.dto.response.TransferResponse;
 import com.example.test.dto.response.UserAccountResponse;
-import com.example.test.exception.AccountNotFoundException;
-import com.example.test.exception.DuplicateEmailException;
-import com.example.test.exception.InsufficientFundsException;
-import com.example.test.exception.InvalidTransferException;
 import com.example.test.model.Account;
 import com.example.test.model.TransactionRecord;
 import com.example.test.model.TransactionRecord.TransactionStatus;
@@ -20,19 +17,19 @@ import com.example.test.repository.UserRepository;
 import com.example.test.service.WalletService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
-
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Sort;
 
 @Service
 @Slf4j
@@ -45,9 +42,9 @@ public class WalletServiceImpl implements WalletService {
 
     @Override
     @Transactional
-    public UserAccountResponse createUserAndAccount(CreateUserRequest request) {
+    public ApiResponse<UserAccountResponse> createUserAndAccount(CreateUserRequest request) {
         if (userRepository.existsByEmail(request.getEmail())) {
-            throw new DuplicateEmailException("A user with email '" + request.getEmail() + "' already exists");
+            return ApiResponse.error("A user with email '" + request.getEmail() + "' already exists");
         }
 
         Account account = new Account();
@@ -63,50 +60,54 @@ public class WalletServiceImpl implements WalletService {
         log.info("Created user [id={}] with account [{}]",
                 savedUser.getId(), savedUser.getAccount().getAccountNumber());
 
-        return UserAccountResponse.builder()
-                .userId(savedUser.getId())
-                .email(savedUser.getEmail())
-                .accountNumber(savedUser.getAccount().getAccountNumber())
-                .balance(savedUser.getAccount().getBalance())
-                .createdAt(savedUser.getAccount().getCreatedAt())
-                .build();
+        return ApiResponse.success("User and account created successfully",
+                UserAccountResponse.builder()
+                        .userId(savedUser.getId())
+                        .email(savedUser.getEmail())
+                        .accountNumber(savedUser.getAccount().getAccountNumber())
+                        .balance(savedUser.getAccount().getBalance())
+                        .createdAt(savedUser.getAccount().getCreatedAt())
+                        .build());
     }
 
     @Override
     @Transactional(isolation = Isolation.READ_COMMITTED, rollbackFor = Exception.class)
-    public TransferResponse doTransfer(TransferRequest request) {
-        validateTransferRequest(request);
+    public ApiResponse<TransferResponse> doTransfer(TransferRequest request) {
+        String validationError = validateTransferRequest(request);
+        if (validationError != null) {
+            return ApiResponse.error(validationError);
+        }
 
         // System-generated reference — unique per transaction, acts as idempotency key
-        // (unique DB constraint prevents duplicate records even under concurrent pressure)
         final String transactionRef = UUID.randomUUID().toString();
 
         // Acquire PESSIMISTIC_WRITE (SELECT ... FOR UPDATE) locks on both accounts.
         // Consistent lock ordering (by account number) prevents deadlocks under concurrency.
-        Account fromAccount = accountRepository.findByAccountNumberWithLock(request.getFromAccount())
-                .orElseThrow(() -> new AccountNotFoundException(
-                        "Source account not found: " + request.getFromAccount()));
+        Optional<Account> fromOpt = accountRepository.findByAccountNumberWithLock(request.getFromAccount());
+        if (fromOpt.isEmpty()) {
+            return ApiResponse.error("Source account not found: " + request.getFromAccount());
+        }
+        Account fromAccount = fromOpt.get();
 
-        Account toAccount = accountRepository.findByAccountNumberWithLock(request.getToAccount())
-                .orElseThrow(() -> new AccountNotFoundException(
-                        "Destination account not found: " + request.getToAccount()));
+        Optional<Account> toOpt = accountRepository.findByAccountNumberWithLock(request.getToAccount());
+        if (toOpt.isEmpty()) {
+            return ApiResponse.error("Destination account not found: " + request.getToAccount());
+        }
+        Account toAccount = toOpt.get();
 
         if (fromAccount.getBalance().compareTo(request.getAmount()) < 0) {
-            throw new InsufficientFundsException(
-                    "Insufficient funds. Available balance: " + fromAccount.getBalance()
+            return ApiResponse.error("Insufficient funds. Available balance: " + fromAccount.getBalance()
                     + ", requested: " + request.getAmount());
         }
 
         fromAccount.setBalance(fromAccount.getBalance().subtract(request.getAmount()));
         toAccount.setBalance(toAccount.getBalance().add(request.getAmount()));
 
-        // Both saves are within the same @Transactional boundary —
-        // any exception after this point will roll back both account updates AND the audit record.
+        // Both saves are within the same @Transactional boundary
         accountRepository.save(fromAccount);
         accountRepository.save(toAccount);
 
         // Persist immutable audit record — unique constraint on transactionRef
-        // ensures this record cannot be duplicated at the database level.
         transactionRepository.save(TransactionRecord.builder()
                 .transactionRef(transactionRef)
                 .fromAccountNumber(request.getFromAccount())
@@ -120,38 +121,42 @@ public class WalletServiceImpl implements WalletService {
                 transactionRef, request.getAmount(), request.getFromAccount(),
                 request.getToAccount(), fromAccount.getBalance());
 
-        return TransferResponse.builder()
-                .transactionRef(transactionRef)
-                .fromAccount(request.getFromAccount())
-                .toAccount(request.getToAccount())
-                .amount(request.getAmount())
-                .newFromBalance(fromAccount.getBalance())
-                .build();
+        return ApiResponse.success("Transfer completed successfully",
+                TransferResponse.builder()
+                        .transactionRef(transactionRef)
+                        .fromAccount(request.getFromAccount())
+                        .toAccount(request.getToAccount())
+                        .amount(request.getAmount())
+                        .newFromBalance(fromAccount.getBalance())
+                        .build());
     }
 
     @Override
     @Transactional(readOnly = true)
-    public UserAccountResponse getAccountBalance(String accountNumber) {
-        Account account = accountRepository.findByAccountNumber(accountNumber)
-                .orElseThrow(() -> new AccountNotFoundException(
-                        "Account not found: " + accountNumber));
+    public ApiResponse<UserAccountResponse> getAccountBalance(String accountNumber) {
+        Optional<Account> accountOpt = accountRepository.findByAccountNumber(accountNumber);
+        if (accountOpt.isEmpty()) {
+            return ApiResponse.error("Account not found: " + accountNumber);
+        }
+        Account account = accountOpt.get();
 
-        return UserAccountResponse.builder()
-                .accountNumber(account.getAccountNumber())
-                .balance(account.getBalance())
-                .createdAt(account.getCreatedAt())
-                .updatedAt(account.getUpdatedAt())
-                .build();
+        return ApiResponse.success("Balance retrieved successfully",
+                UserAccountResponse.builder()
+                        .accountNumber(account.getAccountNumber())
+                        .balance(account.getBalance())
+                        .createdAt(account.getCreatedAt())
+                        .updatedAt(account.getUpdatedAt())
+                        .build());
     }
 
     @Override
     @Transactional(readOnly = true)
-    public PagedResponse<TransactionRecordResponse> getTransactionHistory(
+    public ApiResponse<PagedResponse<TransactionRecordResponse>> getTransactionHistory(
             String accountNumber, int page, int size) {
 
-        accountRepository.findByAccountNumber(accountNumber)
-                .orElseThrow(() -> new AccountNotFoundException(
-                        "Account not found: " + accountNumber));
+        if (accountRepository.findByAccountNumber(accountNumber).isEmpty()) {
+            return ApiResponse.error("Account not found: " + accountNumber);
+        }
 
         // Cap page size at 100 to prevent oversized queries
         int cappedSize = Math.min(size, 100);
@@ -166,26 +171,28 @@ public class WalletServiceImpl implements WalletService {
                 .map(this::toResponse)
                 .collect(Collectors.toList());
 
-        return PagedResponse.<TransactionRecordResponse>builder()
-                .content(content)
-                .page(resultPage.getNumber())
-                .size(resultPage.getSize())
-                .totalElements(resultPage.getTotalElements())
-                .totalPages(resultPage.getTotalPages())
-                .last(resultPage.isLast())
-                .build();
+        return ApiResponse.success("Transaction history retrieved",
+                PagedResponse.<TransactionRecordResponse>builder()
+                        .content(content)
+                        .page(resultPage.getNumber())
+                        .size(resultPage.getSize())
+                        .totalElements(resultPage.getTotalElements())
+                        .totalPages(resultPage.getTotalPages())
+                        .last(resultPage.isLast())
+                        .build());
     }
 
     @Override
     @Transactional(readOnly = true)
-    public List<TransactionRecordResponse> getTransactionHistory(String accountNumber) {
-        accountRepository.findByAccountNumber(accountNumber)
-                .orElseThrow(() -> new AccountNotFoundException(
-                        "Account not found: " + accountNumber));
+    public ApiResponse<List<TransactionRecordResponse>> getTransactionHistory(String accountNumber) {
+        if (accountRepository.findByAccountNumber(accountNumber).isEmpty()) {
+            return ApiResponse.error("Account not found: " + accountNumber);
+        }
 
-        return transactionRepository.findByAccountNumber(accountNumber).stream()
-                .map(this::toResponse)
-                .collect(Collectors.toList());
+        return ApiResponse.success("Transaction history retrieved",
+                transactionRepository.findByAccountNumber(accountNumber).stream()
+                        .map(this::toResponse)
+                        .collect(Collectors.toList()));
     }
 
     private TransactionRecordResponse toResponse(TransactionRecord record) {
@@ -201,17 +208,18 @@ public class WalletServiceImpl implements WalletService {
                 .build();
     }
 
-    private void validateTransferRequest(TransferRequest request) {
+    /** Returns an error message string, or null if the request is valid. */
+    private String validateTransferRequest(TransferRequest request) {
         if (request.getAmount() == null || request.getAmount().compareTo(BigDecimal.ZERO) <= 0) {
-            throw new InvalidTransferException("Transfer amount must be greater than zero");
+            return "Transfer amount must be greater than zero";
         }
         if (request.getFromAccount().equalsIgnoreCase(request.getToAccount())) {
-            throw new InvalidTransferException("Source and destination accounts must be different");
+            return "Source and destination accounts must be different";
         }
+        return null;
     }
 
     private String generateAccountNumber() {
-        // Generate a unique 10-digit NUBAN-style account number (1000000000 – 9999999999)
         long number = ThreadLocalRandom.current().nextLong(1_000_000_000L, 10_000_000_000L);
         return String.valueOf(number);
     }

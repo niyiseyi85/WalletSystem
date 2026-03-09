@@ -50,6 +50,6 @@ public class TransactionRecord implements Serializable {
     }
 
     public enum TransactionStatus {
-        SUCCESS, FAILED
+        SUCCESS, FAILED, PENDING
     }
 }

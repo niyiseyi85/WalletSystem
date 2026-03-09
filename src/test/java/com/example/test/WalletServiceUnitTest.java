@@ -2,13 +2,11 @@ package com.example.test;
 
 import com.example.test.dto.request.CreateUserRequest;
 import com.example.test.dto.request.TransferRequest;
+import com.example.test.dto.response.ApiResponse;
 import com.example.test.dto.response.PagedResponse;
+import com.example.test.dto.response.TransactionRecordResponse;
 import com.example.test.dto.response.TransferResponse;
 import com.example.test.dto.response.UserAccountResponse;
-import com.example.test.exception.AccountNotFoundException;
-import com.example.test.exception.DuplicateEmailException;
-import com.example.test.exception.InsufficientFundsException;
-import com.example.test.exception.InvalidTransferException;
 import com.example.test.model.Account;
 import com.example.test.model.TransactionRecord;
 import com.example.test.model.User;
@@ -35,7 +33,6 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -56,10 +53,6 @@ class WalletServiceUnitTest {
 
     @InjectMocks
     private WalletServiceImpl walletService;
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Helpers
-    // ─────────────────────────────────────────────────────────────────────────
 
     private Account buildAccount(String accountNumber, BigDecimal balance) {
         Account account = new Account();
@@ -82,9 +75,6 @@ class WalletServiceUnitTest {
         return user;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // createUserAndAccount
-    // ─────────────────────────────────────────────────────────────────────────
 
     @Nested
     @DisplayName("createUserAndAccount")
@@ -101,12 +91,13 @@ class WalletServiceUnitTest {
             when(userRepository.existsByEmail("alice@example.com")).thenReturn(false);
             when(userRepository.save(any(User.class))).thenReturn(savedUser);
 
-            UserAccountResponse response = walletService.createUserAndAccount(request);
+            ApiResponse<UserAccountResponse> result = walletService.createUserAndAccount(request);
 
-            assertThat(response.getEmail()).isEqualTo("alice@example.com");
-            assertThat(response.getAccountNumber()).isEqualTo("1234567890");
-            assertThat(response.getBalance()).isEqualByComparingTo(BigDecimal.ZERO);
-            assertThat(response.getUserId()).isEqualTo(1L);
+            assertThat(result.isSuccess()).isTrue();
+            assertThat(result.getData().getEmail()).isEqualTo("alice@example.com");
+            assertThat(result.getData().getAccountNumber()).isEqualTo("1234567890");
+            assertThat(result.getData().getBalance()).isEqualByComparingTo(BigDecimal.ZERO);
+            assertThat(result.getData().getUserId()).isEqualTo(1L);
             verify(userRepository).save(any(User.class));
         }
 
@@ -115,18 +106,15 @@ class WalletServiceUnitTest {
         void shouldThrow_whenEmailAlreadyExists() {
             when(userRepository.existsByEmail("bob@example.com")).thenReturn(true);
 
-            assertThatThrownBy(() ->
-                    walletService.createUserAndAccount(new CreateUserRequest("bob@example.com")))
-                    .isInstanceOf(DuplicateEmailException.class)
-                    .hasMessageContaining("bob@example.com");
+            ApiResponse<UserAccountResponse> result =
+                    walletService.createUserAndAccount(new CreateUserRequest("bob@example.com"));
 
+            assertThat(result.isSuccess()).isFalse();
+            assertThat(result.getMessage()).contains("bob@example.com");
             verify(userRepository, never()).save(any());
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // doTransfer — success path
-    // ─────────────────────────────────────────────────────────────────────────
 
     @Nested
     @DisplayName("doTransfer")
@@ -152,15 +140,16 @@ class WalletServiceUnitTest {
             when(transactionRepository.save(any(TransactionRecord.class)))
                     .thenAnswer(inv -> inv.getArgument(0));
 
-            TransferResponse result = walletService.doTransfer(
+            ApiResponse<TransferResponse> result = walletService.doTransfer(
                     new TransferRequest("1000000001", "2000000002", new BigDecimal("400.00")));
 
+            assertThat(result.isSuccess()).isTrue();
             // Sender debited
-            assertThat(result.getNewFromBalance()).isEqualByComparingTo(new BigDecimal("600.00"));
+            assertThat(result.getData().getNewFromBalance()).isEqualByComparingTo(new BigDecimal("600.00"));
             // Receiver credited
             assertThat(receiver.getBalance()).isEqualByComparingTo(new BigDecimal("400.00"));
-            assertThat(result.getTransactionRef()).isNotBlank();
-            assertThat(result.getAmount()).isEqualByComparingTo(new BigDecimal("400.00"));
+            assertThat(result.getData().getTransactionRef()).isNotBlank();
+            assertThat(result.getData().getAmount()).isEqualByComparingTo(new BigDecimal("400.00"));
         }
 
         @Test
@@ -216,13 +205,11 @@ class WalletServiceUnitTest {
             when(accountRepository.findByAccountNumberWithLock("2000000002"))
                     .thenReturn(Optional.of(receiver));
 
-            assertThatThrownBy(() ->
-                    walletService.doTransfer(
-                            new TransferRequest("1000000001", "2000000002", new BigDecimal("200.00"))))
-                    .isInstanceOf(InsufficientFundsException.class)
-                    .hasMessageContaining("Insufficient funds")
-                    .hasMessageContaining("50.00");
+            ApiResponse<TransferResponse> result = walletService.doTransfer(
+                    new TransferRequest("1000000001", "2000000002", new BigDecimal("200.00")));
 
+            assertThat(result.isSuccess()).isFalse();
+            assertThat(result.getMessage()).contains("Insufficient funds").contains("50.00");
             // No money should have moved, no audit record saved
             verify(accountRepository, never()).save(any());
             verify(transactionRepository, never()).save(any());
@@ -238,11 +225,10 @@ class WalletServiceUnitTest {
             when(accountRepository.findByAccountNumberWithLock("2000000002"))
                     .thenReturn(Optional.of(receiver));
 
-            assertThatThrownBy(() ->
-                    walletService.doTransfer(
-                            new TransferRequest("1000000001", "2000000002", new BigDecimal("0.01"))))
-                    .isInstanceOf(InsufficientFundsException.class);
+            ApiResponse<TransferResponse> result = walletService.doTransfer(
+                    new TransferRequest("1000000001", "2000000002", new BigDecimal("0.01")));
 
+            assertThat(result.isSuccess()).isFalse();
             verify(transactionRepository, never()).save(any());
         }
 
@@ -252,12 +238,11 @@ class WalletServiceUnitTest {
             when(accountRepository.findByAccountNumberWithLock("MISSING"))
                     .thenReturn(Optional.empty());
 
-            assertThatThrownBy(() ->
-                    walletService.doTransfer(
-                            new TransferRequest("MISSING", "2000000002", new BigDecimal("100.00"))))
-                    .isInstanceOf(AccountNotFoundException.class)
-                    .hasMessageContaining("MISSING");
+            ApiResponse<TransferResponse> result = walletService.doTransfer(
+                    new TransferRequest("MISSING", "2000000002", new BigDecimal("100.00")));
 
+            assertThat(result.isSuccess()).isFalse();
+            assertThat(result.getMessage()).contains("MISSING");
             verify(transactionRepository, never()).save(any());
         }
 
@@ -269,12 +254,11 @@ class WalletServiceUnitTest {
             when(accountRepository.findByAccountNumberWithLock("MISSING"))
                     .thenReturn(Optional.empty());
 
-            assertThatThrownBy(() ->
-                    walletService.doTransfer(
-                            new TransferRequest("1000000001", "MISSING", new BigDecimal("100.00"))))
-                    .isInstanceOf(AccountNotFoundException.class)
-                    .hasMessageContaining("MISSING");
+            ApiResponse<TransferResponse> result = walletService.doTransfer(
+                    new TransferRequest("1000000001", "MISSING", new BigDecimal("100.00")));
 
+            assertThat(result.isSuccess()).isFalse();
+            assertThat(result.getMessage()).contains("MISSING");
             verify(transactionRepository, never()).save(any());
         }
 
@@ -283,12 +267,11 @@ class WalletServiceUnitTest {
         @Test
         @DisplayName("should throw InvalidTransferException when source and destination are the same")
         void shouldThrow_whenSameAccount() {
-            assertThatThrownBy(() ->
-                    walletService.doTransfer(
-                            new TransferRequest("1000000001", "1000000001", new BigDecimal("100.00"))))
-                    .isInstanceOf(InvalidTransferException.class)
-                    .hasMessageContaining("different");
+            ApiResponse<TransferResponse> result = walletService.doTransfer(
+                    new TransferRequest("1000000001", "1000000001", new BigDecimal("100.00")));
 
+            assertThat(result.isSuccess()).isFalse();
+            assertThat(result.getMessage()).contains("different");
             verify(accountRepository, never()).findByAccountNumberWithLock(anyString());
             verify(transactionRepository, never()).save(any());
         }
@@ -296,24 +279,22 @@ class WalletServiceUnitTest {
         @Test
         @DisplayName("should throw InvalidTransferException when amount is zero")
         void shouldThrow_whenAmountIsZero() {
-            assertThatThrownBy(() ->
-                    walletService.doTransfer(
-                            new TransferRequest("1000000001", "2000000002", BigDecimal.ZERO)))
-                    .isInstanceOf(InvalidTransferException.class)
-                    .hasMessageContaining("greater than zero");
+            ApiResponse<TransferResponse> result = walletService.doTransfer(
+                    new TransferRequest("1000000001", "2000000002", BigDecimal.ZERO));
 
+            assertThat(result.isSuccess()).isFalse();
+            assertThat(result.getMessage()).contains("greater than zero");
             verify(accountRepository, never()).findByAccountNumberWithLock(anyString());
         }
 
         @Test
         @DisplayName("should throw InvalidTransferException when amount is negative")
         void shouldThrow_whenAmountIsNegative() {
-            assertThatThrownBy(() ->
-                    walletService.doTransfer(
-                            new TransferRequest("1000000001", "2000000002", new BigDecimal("-1.00"))))
-                    .isInstanceOf(InvalidTransferException.class)
-                    .hasMessageContaining("greater than zero");
+            ApiResponse<TransferResponse> result = walletService.doTransfer(
+                    new TransferRequest("1000000001", "2000000002", new BigDecimal("-1.00")));
 
+            assertThat(result.isSuccess()).isFalse();
+            assertThat(result.getMessage()).contains("greater than zero");
             verify(accountRepository, never()).findByAccountNumberWithLock(anyString());
         }
 
@@ -329,10 +310,11 @@ class WalletServiceUnitTest {
             when(accountRepository.save(any(Account.class))).thenAnswer(inv -> inv.getArgument(0));
             when(transactionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-            TransferResponse result = walletService.doTransfer(
+            ApiResponse<TransferResponse> result = walletService.doTransfer(
                     new TransferRequest("1000000001", "2000000002", new BigDecimal("100.00")));
 
-            assertThat(result.getNewFromBalance()).isEqualByComparingTo(BigDecimal.ZERO);
+            assertThat(result.isSuccess()).isTrue();
+            assertThat(result.getData().getNewFromBalance()).isEqualByComparingTo(BigDecimal.ZERO);
             assertThat(receiver.getBalance()).isEqualByComparingTo(new BigDecimal("100.00"));
         }
     }
@@ -352,12 +334,13 @@ class WalletServiceUnitTest {
             when(accountRepository.findByAccountNumber("1234567890"))
                     .thenReturn(Optional.of(account));
 
-            UserAccountResponse response = walletService.getAccountBalance("1234567890");
+            ApiResponse<UserAccountResponse> result = walletService.getAccountBalance("1234567890");
 
-            assertThat(response.getAccountNumber()).isEqualTo("1234567890");
-            assertThat(response.getBalance()).isEqualByComparingTo(new BigDecimal("999.99"));
-            assertThat(response.getCreatedAt()).isNotNull();
-            assertThat(response.getUpdatedAt()).isNotNull();
+            assertThat(result.isSuccess()).isTrue();
+            assertThat(result.getData().getAccountNumber()).isEqualTo("1234567890");
+            assertThat(result.getData().getBalance()).isEqualByComparingTo(new BigDecimal("999.99"));
+            assertThat(result.getData().getCreatedAt()).isNotNull();
+            assertThat(result.getData().getUpdatedAt()).isNotNull();
         }
 
         @Test
@@ -366,9 +349,10 @@ class WalletServiceUnitTest {
             when(accountRepository.findByAccountNumber("UNKNOWN"))
                     .thenReturn(Optional.empty());
 
-            assertThatThrownBy(() -> walletService.getAccountBalance("UNKNOWN"))
-                    .isInstanceOf(AccountNotFoundException.class)
-                    .hasMessageContaining("UNKNOWN");
+            ApiResponse<UserAccountResponse> result = walletService.getAccountBalance("UNKNOWN");
+
+            assertThat(result.isSuccess()).isFalse();
+            assertThat(result.getMessage()).contains("UNKNOWN");
         }
     }
 
@@ -400,7 +384,9 @@ class WalletServiceUnitTest {
             when(transactionRepository.findByAccountNumber("1234567890"))
                     .thenReturn(List.of(record));
 
-            var history = walletService.getTransactionHistory("1234567890");
+            var result = walletService.getTransactionHistory("1234567890");
+            assertThat(result.isSuccess()).isTrue();
+            var history = result.getData();
 
             assertThat(history).hasSize(1);
             assertThat(history.get(0).getTransactionRef()).isEqualTo("ref-001");
@@ -419,9 +405,10 @@ class WalletServiceUnitTest {
             when(transactionRepository.findByAccountNumber("1234567890"))
                     .thenReturn(List.of());
 
-            var history = walletService.getTransactionHistory("1234567890");
+            var result = walletService.getTransactionHistory("1234567890");
 
-            assertThat(history).isEmpty();
+            assertThat(result.isSuccess()).isTrue();
+            assertThat(result.getData()).isEmpty();
         }
 
         @Test
@@ -430,9 +417,10 @@ class WalletServiceUnitTest {
             when(accountRepository.findByAccountNumber("UNKNOWN"))
                     .thenReturn(Optional.empty());
 
-            assertThatThrownBy(() -> walletService.getTransactionHistory("UNKNOWN"))
-                    .isInstanceOf(AccountNotFoundException.class)
-                    .hasMessageContaining("UNKNOWN");
+            var result = walletService.getTransactionHistory("UNKNOWN");
+
+            assertThat(result.isSuccess()).isFalse();
+            assertThat(result.getMessage()).contains("UNKNOWN");
         }
     }
 
@@ -464,8 +452,9 @@ class WalletServiceUnitTest {
             when(transactionRepository.findByAccountNumber(eq("1234567890"), any(Pageable.class)))
                     .thenReturn(new PageImpl<>(List.of(record), PageRequest.of(0, 20), 1));
 
-            PagedResponse<com.example.test.dto.response.TransactionRecordResponse> result =
-                    walletService.getTransactionHistory("1234567890", 0, 20);
+            var apiResult = walletService.getTransactionHistory("1234567890", 0, 20);
+            assertThat(apiResult.isSuccess()).isTrue();
+            PagedResponse<TransactionRecordResponse> result = apiResult.getData();
 
             assertThat(result.getContent()).hasSize(1);
             assertThat(result.getPage()).isZero();
@@ -486,8 +475,9 @@ class WalletServiceUnitTest {
             when(transactionRepository.findByAccountNumber(eq("1234567890"), any(Pageable.class)))
                     .thenReturn(new PageImpl<>(List.of(), PageRequest.of(0, 20), 0));
 
-            PagedResponse<com.example.test.dto.response.TransactionRecordResponse> result =
-                    walletService.getTransactionHistory("1234567890", 0, 20);
+            var apiResult = walletService.getTransactionHistory("1234567890", 0, 20);
+            assertThat(apiResult.isSuccess()).isTrue();
+            PagedResponse<TransactionRecordResponse> result = apiResult.getData();
 
             assertThat(result.getContent()).isEmpty();
             assertThat(result.getTotalElements()).isZero();
@@ -519,9 +509,10 @@ class WalletServiceUnitTest {
             when(accountRepository.findByAccountNumber("UNKNOWN"))
                     .thenReturn(Optional.empty());
 
-            assertThatThrownBy(() -> walletService.getTransactionHistory("UNKNOWN", 0, 20))
-                    .isInstanceOf(AccountNotFoundException.class)
-                    .hasMessageContaining("UNKNOWN");
+            var result = walletService.getTransactionHistory("UNKNOWN", 0, 20);
+
+            assertThat(result.isSuccess()).isFalse();
+            assertThat(result.getMessage()).contains("UNKNOWN");
         }
     }
 }

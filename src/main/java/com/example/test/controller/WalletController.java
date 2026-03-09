@@ -18,8 +18,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.List;
-
 @RestController
 @RequestMapping("/api/v1/wallet")
 @RequiredArgsConstructor
@@ -38,10 +36,10 @@ public class WalletController {
             @Valid @RequestBody CreateUserRequest request) {
 
         log.info("Received create user request for email: {}", request.getEmail());
-        UserAccountResponse response = walletService.createUserAndAccount(request);
-        return ResponseEntity
-                .status(HttpStatus.CREATED)
-                .body(ApiResponse.success("User and account created successfully", response));
+        ApiResponse<UserAccountResponse> response = walletService.createUserAndAccount(request);
+        return response.isSuccess()
+                ? ResponseEntity.status(HttpStatus.CREATED).body(response)
+                : ResponseEntity.ok(response);
     }
 
     /**
@@ -54,9 +52,7 @@ public class WalletController {
 
         log.info("Received transfer request: {} -> {}, amount: {}",
                 request.getFromAccount(), request.getToAccount(), request.getAmount());
-        TransferResponse response = walletService.doTransfer(request);
-        return ResponseEntity
-                .ok(ApiResponse.success("Transfer completed successfully", response));
+        return ResponseEntity.ok(walletService.doTransfer(request));
     }
 
     /**
@@ -68,9 +64,7 @@ public class WalletController {
             @PathVariable String accountNumber) {
 
         log.info("Received balance enquiry for account: {}", accountNumber);
-        UserAccountResponse response = walletService.getAccountBalance(accountNumber);
-        return ResponseEntity
-                .ok(ApiResponse.success("Account balance retrieved successfully", response));
+        return ResponseEntity.ok(walletService.getAccountBalance(accountNumber));
     }
 
     /**
@@ -89,9 +83,6 @@ public class WalletController {
 
         log.info("Transaction history request: account={}, page={}, size={}",
                 accountNumber, page, size);
-        PagedResponse<TransactionRecordResponse> response =
-                walletService.getTransactionHistory(accountNumber, page, size);
-        return ResponseEntity
-                .ok(ApiResponse.success("Transaction history retrieved successfully", response));
+        return ResponseEntity.ok(walletService.getTransactionHistory(accountNumber, page, size));
     }
 }
