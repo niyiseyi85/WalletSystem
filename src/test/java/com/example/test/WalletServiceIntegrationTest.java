@@ -19,7 +19,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.util.List;
-import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -73,12 +72,13 @@ class WalletServiceIntegrationTest {
         seedBalance(userA.getAccountNumber(), new BigDecimal("1000.00"));
 
         TransferResponse result = walletService.doTransfer(
-                new TransferRequest(userA.getAccountNumber(), userB.getAccountNumber(), new BigDecimal("400.00"), UUID.randomUUID().toString()));
+                new TransferRequest(userA.getAccountNumber(), userB.getAccountNumber(), new BigDecimal("400.00")));
 
         assertThat(result.getNewFromBalance()).isEqualByComparingTo(new BigDecimal("600.00"));
         assertThat(result.getFromAccount()).isEqualTo(userA.getAccountNumber());
         assertThat(result.getToAccount()).isEqualTo(userB.getAccountNumber());
         assertThat(result.getAmount()).isEqualByComparingTo(new BigDecimal("400.00"));
+        assertThat(result.getTransactionRef()).isNotBlank();
     }
 
     @Test
@@ -89,7 +89,7 @@ class WalletServiceIntegrationTest {
                 new CreateUserRequest("rich@example.com"));
 
         assertThatThrownBy(() -> walletService.doTransfer(
-                new TransferRequest(sender.getAccountNumber(), receiver.getAccountNumber(), new BigDecimal("0.01"), UUID.randomUUID().toString())))
+                new TransferRequest(sender.getAccountNumber(), receiver.getAccountNumber(), new BigDecimal("0.01"))))
                 .isInstanceOf(InsufficientFundsException.class)
                 .hasMessageContaining("Insufficient funds");
     }
@@ -100,7 +100,7 @@ class WalletServiceIntegrationTest {
                 new CreateUserRequest("receiver2@example.com"));
 
         assertThatThrownBy(() -> walletService.doTransfer(
-                new TransferRequest("NOTEXIST001", receiver.getAccountNumber(), new BigDecimal("100.00"), UUID.randomUUID().toString())))
+                new TransferRequest("NOTEXIST001", receiver.getAccountNumber(), new BigDecimal("100.00"))))
                 .isInstanceOf(AccountNotFoundException.class)
                 .hasMessageContaining("NOTEXIST001");
     }
@@ -111,7 +111,7 @@ class WalletServiceIntegrationTest {
                 new CreateUserRequest("sender2@example.com"));
 
         assertThatThrownBy(() -> walletService.doTransfer(
-                new TransferRequest(sender.getAccountNumber(), "NOTEXIST001", new BigDecimal("100.00"), UUID.randomUUID().toString())))
+                new TransferRequest(sender.getAccountNumber(), "NOTEXIST001", new BigDecimal("100.00"))))
                 .isInstanceOf(AccountNotFoundException.class)
                 .hasMessageContaining("NOTEXIST001");
     }
@@ -122,7 +122,7 @@ class WalletServiceIntegrationTest {
                 new CreateUserRequest("self@example.com"));
 
         assertThatThrownBy(() -> walletService.doTransfer(
-                new TransferRequest(user.getAccountNumber(), user.getAccountNumber(), new BigDecimal("100.00"), UUID.randomUUID().toString())))
+                new TransferRequest(user.getAccountNumber(), user.getAccountNumber(), new BigDecimal("100.00"))))
                 .isInstanceOf(InvalidTransferException.class)
                 .hasMessageContaining("different");
     }
@@ -135,7 +135,7 @@ class WalletServiceIntegrationTest {
                 new CreateUserRequest("usery@example.com"));
 
         assertThatThrownBy(() -> walletService.doTransfer(
-                new TransferRequest(userA.getAccountNumber(), userB.getAccountNumber(), BigDecimal.ZERO, UUID.randomUUID().toString())))
+                new TransferRequest(userA.getAccountNumber(), userB.getAccountNumber(), BigDecimal.ZERO)))
                 .isInstanceOf(InvalidTransferException.class)
                 .hasMessageContaining("greater than zero");
     }
@@ -176,7 +176,7 @@ class WalletServiceIntegrationTest {
 
         seedBalance(userA.getAccountNumber(), new BigDecimal("500.00"));
         walletService.doTransfer(
-                new TransferRequest(userA.getAccountNumber(), userB.getAccountNumber(), new BigDecimal("200.00"), UUID.randomUUID().toString()));
+                new TransferRequest(userA.getAccountNumber(), userB.getAccountNumber(), new BigDecimal("200.00")));
 
         List<TransactionRecordResponse> history = walletService.getTransactionHistory(userA.getAccountNumber());
 
@@ -199,27 +199,25 @@ class WalletServiceIntegrationTest {
     }
 
     @Test
-    void shouldReturnCachedResult_whenSameTransactionRefIsResubmitted() {
+    void shouldGenerateUniqueTransactionRef_forEachTransfer() {
         UserAccountResponse userA = walletService.createUserAndAccount(
-                new CreateUserRequest("idem_a@example.com"));
+                new CreateUserRequest("ref_a@example.com"));
         UserAccountResponse userB = walletService.createUserAndAccount(
-                new CreateUserRequest("idem_b@example.com"));
+                new CreateUserRequest("ref_b@example.com"));
 
-        seedBalance(userA.getAccountNumber(), new BigDecimal("1000.00"));
-        String idempotencyKey = UUID.randomUUID().toString();
+        seedBalance(userA.getAccountNumber(), new BigDecimal("2000.00"));
 
         TransferResponse first = walletService.doTransfer(
-                new TransferRequest(userA.getAccountNumber(), userB.getAccountNumber(), new BigDecimal("300.00"), idempotencyKey));
+                new TransferRequest(userA.getAccountNumber(), userB.getAccountNumber(), new BigDecimal("100.00")));
 
-        // Re-submit the exact same request—should NOT debit again
+        seedBalance(userA.getAccountNumber(), new BigDecimal("2000.00"));
+
         TransferResponse second = walletService.doTransfer(
-                new TransferRequest(userA.getAccountNumber(), userB.getAccountNumber(), new BigDecimal("300.00"), idempotencyKey));
+                new TransferRequest(userA.getAccountNumber(), userB.getAccountNumber(), new BigDecimal("100.00")));
 
-        assertThat(second.getTransactionRef()).isEqualTo(first.getTransactionRef());
-        assertThat(second.getNewFromBalance()).isEqualByComparingTo(first.getNewFromBalance());
-        // Balance must still be 700 (only debited once)
-        assertThat(walletService.getAccountBalance(userA.getAccountNumber()).getBalance())
-                .isEqualByComparingTo(new BigDecimal("700.00"));
+        assertThat(first.getTransactionRef()).isNotBlank();
+        assertThat(second.getTransactionRef()).isNotBlank();
+        assertThat(first.getTransactionRef()).isNotEqualTo(second.getTransactionRef());
     }
 
     // ─────────────────────────────────────────────
@@ -229,7 +227,7 @@ class WalletServiceIntegrationTest {
     private void seedBalance(String accountNumber, BigDecimal amount) {
         com.example.test.model.Account account = accountJpaRepository
                 .findByAccountNumber(accountNumber).orElseThrow();
-        account.getWalletBalance().setAmount(amount);
+        account.setBalance(amount);
         accountJpaRepository.save(account);
     }
 }

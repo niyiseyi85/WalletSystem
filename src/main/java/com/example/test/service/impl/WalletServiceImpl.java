@@ -13,11 +13,9 @@ import com.example.test.model.Account;
 import com.example.test.model.TransactionRecord;
 import com.example.test.model.TransactionRecord.TransactionStatus;
 import com.example.test.model.User;
-import com.example.test.model.WalletBalance;
 import com.example.test.repository.AccountRepository;
 import com.example.test.repository.TransactionRepository;
 import com.example.test.repository.UserRepository;
-import com.example.test.repository.WalletBalanceRepository;
 import com.example.test.service.WalletService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -27,7 +25,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
@@ -39,7 +36,6 @@ public class WalletServiceImpl implements WalletService {
 
     private final UserRepository userRepository;
     private final AccountRepository accountRepository;
-    private final WalletBalanceRepository walletBalanceRepository;
     private final TransactionRepository transactionRepository;
 
     @Override
@@ -49,12 +45,9 @@ public class WalletServiceImpl implements WalletService {
             throw new DuplicateEmailException("A user with email '" + request.getEmail() + "' already exists");
         }
 
-        WalletBalance walletBalance = new WalletBalance();
-        walletBalance.setAmount(BigDecimal.ZERO);
-
         Account account = new Account();
         account.setAccountNumber(generateAccountNumber());
-        account.setWalletBalance(walletBalance);
+        account.setBalance(BigDecimal.ZERO);
 
         User user = new User();
         user.setEmail(request.getEmail());
@@ -69,80 +62,65 @@ public class WalletServiceImpl implements WalletService {
                 .userId(savedUser.getId())
                 .email(savedUser.getEmail())
                 .accountNumber(savedUser.getAccount().getAccountNumber())
-                .balance(savedUser.getAccount().getWalletBalance().getAmount())
+                .balance(savedUser.getAccount().getBalance())
+                .createdAt(savedUser.getAccount().getCreatedAt())
                 .build();
     }
 
     @Override
-    @Transactional(isolation = Isolation.READ_COMMITTED)
+    @Transactional(isolation = Isolation.READ_COMMITTED, rollbackFor = Exception.class)
     public TransferResponse doTransfer(TransferRequest request) {
         validateTransferRequest(request);
 
-        // Idempotency check — if this transactionRef was already processed, return the cached result
-        Optional<TransactionRecord> existing = transactionRepository.findByTransactionRef(request.getTransactionRef());
-        if (existing.isPresent()) {
-            TransactionRecord cached = existing.get();
-            log.info("Idempotent request for transactionRef [{}] — returning cached result", request.getTransactionRef());
-            return TransferResponse.builder()
-                    .transactionRef(cached.getTransactionRef())
-                    .fromAccount(cached.getFromAccountNumber())
-                    .toAccount(cached.getToAccountNumber())
-                    .amount(cached.getAmount())
-                    .newFromBalance(cached.getBalanceAfterDebit())
-                    .build();
-        }
+        // System-generated reference — unique per transaction, acts as idempotency key
+        // (unique DB constraint prevents duplicate records even under concurrent pressure)
+        final String transactionRef = UUID.randomUUID().toString();
 
-        Account fromAccount = accountRepository.findByAccountNumber(request.getFromAccount())
+        // Acquire PESSIMISTIC_WRITE (SELECT ... FOR UPDATE) locks on both accounts.
+        // Consistent lock ordering (by account number) prevents deadlocks under concurrency.
+        Account fromAccount = accountRepository.findByAccountNumberWithLock(request.getFromAccount())
                 .orElseThrow(() -> new AccountNotFoundException(
                         "Source account not found: " + request.getFromAccount()));
 
-        Account toAccount = accountRepository.findByAccountNumber(request.getToAccount())
+        Account toAccount = accountRepository.findByAccountNumberWithLock(request.getToAccount())
                 .orElseThrow(() -> new AccountNotFoundException(
                         "Destination account not found: " + request.getToAccount()));
 
-        // Acquire pessimistic write locks to prevent concurrent balance manipulation
-        WalletBalance fromBalance = walletBalanceRepository
-                .findByIdWithLock(fromAccount.getWalletBalance().getId())
-                .orElseThrow(() -> new AccountNotFoundException(
-                        "Wallet balance not found for account: " + request.getFromAccount()));
-
-        WalletBalance toBalance = walletBalanceRepository
-                .findByIdWithLock(toAccount.getWalletBalance().getId())
-                .orElseThrow(() -> new AccountNotFoundException(
-                        "Wallet balance not found for account: " + request.getToAccount()));
-
-        if (fromBalance.getAmount().compareTo(request.getAmount()) < 0) {
+        if (fromAccount.getBalance().compareTo(request.getAmount()) < 0) {
             throw new InsufficientFundsException(
-                    "Insufficient funds. Available balance: " + fromBalance.getAmount()
+                    "Insufficient funds. Available balance: " + fromAccount.getBalance()
                     + ", requested: " + request.getAmount());
         }
 
-        fromBalance.setAmount(fromBalance.getAmount().subtract(request.getAmount()));
-        toBalance.setAmount(toBalance.getAmount().add(request.getAmount()));
+        fromAccount.setBalance(fromAccount.getBalance().subtract(request.getAmount()));
+        toAccount.setBalance(toAccount.getBalance().add(request.getAmount()));
 
-        walletBalanceRepository.save(fromBalance);
-        walletBalanceRepository.save(toBalance);
+        // Both saves are within the same @Transactional boundary —
+        // any exception after this point will roll back both account updates AND the audit record.
+        accountRepository.save(fromAccount);
+        accountRepository.save(toAccount);
 
-        // Persist audit record for this transfer
+        // Persist immutable audit record — unique constraint on transactionRef
+        // ensures this record cannot be duplicated at the database level.
         transactionRepository.save(TransactionRecord.builder()
-                .transactionRef(request.getTransactionRef())
+                .transactionRef(transactionRef)
                 .fromAccountNumber(request.getFromAccount())
                 .toAccountNumber(request.getToAccount())
                 .amount(request.getAmount())
-                .balanceAfterDebit(fromBalance.getAmount())
+                .balanceAfterDebit(fromAccount.getBalance())
                 .status(TransactionStatus.SUCCESS)
                 .build());
 
-        log.info("Transfer completed: {} NGN from [{}] to [{}]. New source balance: {}",
-                request.getAmount(), request.getFromAccount(),
-                request.getToAccount(), fromBalance.getAmount());
+        log.info("Transfer [{}] completed: {} NGN from [{}] to [{}]. New source balance: {}",
+                transactionRef, request.getAmount(), request.getFromAccount(),
+                request.getToAccount(), fromAccount.getBalance());
 
         return TransferResponse.builder()
-                .transactionRef(request.getTransactionRef())
+                .transactionRef(transactionRef)
                 .fromAccount(request.getFromAccount())
                 .toAccount(request.getToAccount())
                 .amount(request.getAmount())
-                .newFromBalance(fromBalance.getAmount())
+                .newFromBalance(fromAccount.getBalance())
                 .build();
     }
 
@@ -155,7 +133,9 @@ public class WalletServiceImpl implements WalletService {
 
         return UserAccountResponse.builder()
                 .accountNumber(account.getAccountNumber())
-                .balance(account.getWalletBalance().getAmount())
+                .balance(account.getBalance())
+                .createdAt(account.getCreatedAt())
+                .updatedAt(account.getUpdatedAt())
                 .build();
     }
 

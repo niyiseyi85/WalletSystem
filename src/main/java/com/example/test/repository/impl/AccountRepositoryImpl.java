@@ -20,6 +20,11 @@ public class AccountRepositoryImpl implements AccountRepository {
     }
 
     @Override
+    public Optional<Account> findByAccountNumberWithLock(String accountNumber) {
+        return accountJpaRepository.findByAccountNumberWithLock(accountNumber);
+    }
+
+    @Override
     public Account save(Account account) {
         return accountJpaRepository.save(account);
     }
