@@ -2,6 +2,7 @@ package com.example.test.service;
 
 import com.example.test.dto.request.CreateUserRequest;
 import com.example.test.dto.request.TransferRequest;
+import com.example.test.dto.response.PagedResponse;
 import com.example.test.dto.response.TransactionRecordResponse;
 import com.example.test.dto.response.TransferResponse;
 import com.example.test.dto.response.UserAccountResponse;
@@ -36,11 +37,19 @@ public interface WalletService {
     UserAccountResponse getAccountBalance(String accountNumber);
 
     /**
-     * Retrieves the full transaction history for a given account number,
+     * Retrieves a paginated page of transaction history for a given account number,
      * ordered most recent first.
      *
      * @param accountNumber the account to query
-     * @return list of all debit and credit transactions for the account
+     * @param page          0-based page number (default 0)
+     * @param size          number of records per page (default 20, max 100)
+     * @return paginated wrapper containing the records and pagination metadata
+     */
+    PagedResponse<TransactionRecordResponse> getTransactionHistory(
+            String accountNumber, int page, int size);
+
+    /**
+     * Non-paginated transaction history — used internally by tests.
      */
     List<TransactionRecordResponse> getTransactionHistory(String accountNumber);
 }

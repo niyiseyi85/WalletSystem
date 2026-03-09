@@ -3,15 +3,19 @@ package com.example.test.controller;
 import com.example.test.dto.request.CreateUserRequest;
 import com.example.test.dto.request.TransferRequest;
 import com.example.test.dto.response.ApiResponse;
+import com.example.test.dto.response.PagedResponse;
 import com.example.test.dto.response.TransactionRecordResponse;
 import com.example.test.dto.response.TransferResponse;
 import com.example.test.dto.response.UserAccountResponse;
 import com.example.test.service.WalletService;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -19,6 +23,7 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/v1/wallet")
 @RequiredArgsConstructor
+@Validated
 @Slf4j
 public class WalletController {
 
@@ -70,14 +75,22 @@ public class WalletController {
 
     /**
      * GET /api/v1/wallet/accounts/{accountNumber}/transactions
-     * Returns all transaction history for an account, most recent first.
+     * Returns a paginated page of transaction history, most recent first.
+     *
+     * Query params:
+     *   page  - 0-based page index (default 0)
+     *   size  - records per page (default 20, max 100)
      */
     @GetMapping("/accounts/{accountNumber}/transactions")
-    public ResponseEntity<ApiResponse<List<TransactionRecordResponse>>> getTransactionHistory(
-            @PathVariable String accountNumber) {
+    public ResponseEntity<ApiResponse<PagedResponse<TransactionRecordResponse>>> getTransactionHistory(
+            @PathVariable String accountNumber,
+            @RequestParam(defaultValue = "0")  @Min(0)        int page,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
 
-        log.info("Received transaction history request for account: {}", accountNumber);
-        List<TransactionRecordResponse> response = walletService.getTransactionHistory(accountNumber);
+        log.info("Transaction history request: account={}, page={}, size={}",
+                accountNumber, page, size);
+        PagedResponse<TransactionRecordResponse> response =
+                walletService.getTransactionHistory(accountNumber, page, size);
         return ResponseEntity
                 .ok(ApiResponse.success("Transaction history retrieved successfully", response));
     }

@@ -2,6 +2,7 @@ package com.example.test;
 
 import com.example.test.dto.request.CreateUserRequest;
 import com.example.test.dto.request.TransferRequest;
+import com.example.test.dto.response.PagedResponse;
 import com.example.test.dto.response.TransactionRecordResponse;
 import com.example.test.dto.response.TransferResponse;
 import com.example.test.dto.response.UserAccountResponse;
@@ -340,6 +341,85 @@ class WalletServiceIntegrationTest {
                 new CreateUserRequest("ts_check@example.com"));
 
         assertThat(response.getCreatedAt()).isNotNull();
+    }
+
+    // ─────────────────────────────────────────────
+    // getTransactionHistory (paginated)
+    // ─────────────────────────────────────────────
+
+    @Test
+    void shouldReturnPagedTransactionHistory_afterTransfer() {
+        UserAccountResponse userA = walletService.createUserAndAccount(
+                new CreateUserRequest("paged_histA@example.com"));
+        UserAccountResponse userB = walletService.createUserAndAccount(
+                new CreateUserRequest("paged_histB@example.com"));
+
+        seedBalance(userA.getAccountNumber(), new BigDecimal("500.00"));
+        walletService.doTransfer(
+                new TransferRequest(userA.getAccountNumber(), userB.getAccountNumber(), new BigDecimal("100.00")));
+
+        PagedResponse<TransactionRecordResponse> page =
+                walletService.getTransactionHistory(userA.getAccountNumber(), 0, 20);
+
+        assertThat(page.getContent()).hasSize(1);
+        assertThat(page.getTotalElements()).isEqualTo(1);
+        assertThat(page.getTotalPages()).isEqualTo(1);
+        assertThat(page.getPage()).isZero();
+        assertThat(page.getSize()).isEqualTo(20);
+        assertThat(page.isLast()).isTrue();
+        assertThat(page.getContent().get(0).getFromAccount()).isEqualTo(userA.getAccountNumber());
+        assertThat(page.getContent().get(0).getAmount()).isEqualByComparingTo(new BigDecimal("100.00"));
+    }
+
+    @Test
+    void shouldReturnEmptyPagedHistory_whenNoTransactions() {
+        UserAccountResponse user = walletService.createUserAndAccount(
+                new CreateUserRequest("paged_empty@example.com"));
+
+        PagedResponse<TransactionRecordResponse> page =
+                walletService.getTransactionHistory(user.getAccountNumber(), 0, 20);
+
+        assertThat(page.getContent()).isEmpty();
+        assertThat(page.getTotalElements()).isZero();
+        assertThat(page.isLast()).isTrue();
+    }
+
+    @Test
+    void shouldThrowAccountNotFoundException_onPagedHistoryForUnknownAccount() {
+        assertThatThrownBy(() -> walletService.getTransactionHistory("0000000000", 0, 20))
+                .isInstanceOf(AccountNotFoundException.class);
+    }
+
+    @Test
+    void shouldRespectPageSizeAndReturnCorrectPage() {
+        UserAccountResponse userA = walletService.createUserAndAccount(
+                new CreateUserRequest("page_size_a@example.com"));
+        UserAccountResponse userB = walletService.createUserAndAccount(
+                new CreateUserRequest("page_size_b@example.com"));
+
+        seedBalance(userA.getAccountNumber(), new BigDecimal("1500.00"));
+
+        // Perform 3 transfers
+        walletService.doTransfer(new TransferRequest(
+                userA.getAccountNumber(), userB.getAccountNumber(), new BigDecimal("100.00")));
+        walletService.doTransfer(new TransferRequest(
+                userA.getAccountNumber(), userB.getAccountNumber(), new BigDecimal("200.00")));
+        walletService.doTransfer(new TransferRequest(
+                userA.getAccountNumber(), userB.getAccountNumber(), new BigDecimal("300.00")));
+
+        // First page of 2
+        PagedResponse<TransactionRecordResponse> firstPage =
+                walletService.getTransactionHistory(userA.getAccountNumber(), 0, 2);
+        assertThat(firstPage.getContent()).hasSize(2);
+        assertThat(firstPage.getTotalElements()).isEqualTo(3);
+        assertThat(firstPage.getTotalPages()).isEqualTo(2);
+        assertThat(firstPage.isLast()).isFalse();
+
+        // Second page of 2 (only 1 remaining)
+        PagedResponse<TransactionRecordResponse> secondPage =
+                walletService.getTransactionHistory(userA.getAccountNumber(), 1, 2);
+        assertThat(secondPage.getContent()).hasSize(1);
+        assertThat(secondPage.isLast()).isTrue();
     }
 
     // ─────────────────────────────────────────────

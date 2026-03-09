@@ -4,6 +4,8 @@ import com.example.test.infrastructure.jpa.TransactionRecordJpaRepository;
 import com.example.test.model.TransactionRecord;
 import com.example.test.repository.TransactionRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
@@ -25,6 +27,12 @@ public class TransactionRepositoryImpl implements TransactionRepository {
         return transactionRecordJpaRepository
                 .findByFromAccountNumberOrToAccountNumberOrderByCreatedAtDesc(
                         accountNumber, accountNumber);
+    }
+
+    @Override
+    public Page<TransactionRecord> findByAccountNumber(String accountNumber, Pageable pageable) {
+        return transactionRecordJpaRepository
+                .findByFromAccountNumberOrToAccountNumber(accountNumber, accountNumber, pageable);
     }
 
     @Override

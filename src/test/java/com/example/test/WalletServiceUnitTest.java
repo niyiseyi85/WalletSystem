@@ -2,6 +2,7 @@ package com.example.test;
 
 import com.example.test.dto.request.CreateUserRequest;
 import com.example.test.dto.request.TransferRequest;
+import com.example.test.dto.response.PagedResponse;
 import com.example.test.dto.response.TransferResponse;
 import com.example.test.dto.response.UserAccountResponse;
 import com.example.test.exception.AccountNotFoundException;
@@ -29,11 +30,15 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
@@ -426,6 +431,95 @@ class WalletServiceUnitTest {
                     .thenReturn(Optional.empty());
 
             assertThatThrownBy(() -> walletService.getTransactionHistory("UNKNOWN"))
+                    .isInstanceOf(AccountNotFoundException.class)
+                    .hasMessageContaining("UNKNOWN");
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // getTransactionHistory (paginated)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    @Nested
+    @DisplayName("getTransactionHistory (paginated)")
+    class GetTransactionHistoryPaged {
+
+        @Test
+        @DisplayName("should return paginated response with correct metadata")
+        void shouldReturnPagedResponse_success() {
+            Account account = buildAccount("1234567890", BigDecimal.ZERO);
+            when(accountRepository.findByAccountNumber("1234567890"))
+                    .thenReturn(Optional.of(account));
+
+            TransactionRecord record = TransactionRecord.builder()
+                    .id(1L)
+                    .transactionRef("ref-001")
+                    .fromAccountNumber("1234567890")
+                    .toAccountNumber("9876543210")
+                    .amount(new BigDecimal("200.00"))
+                    .balanceAfterDebit(new BigDecimal("800.00"))
+                    .status(TransactionRecord.TransactionStatus.SUCCESS)
+                    .build();
+
+            when(transactionRepository.findByAccountNumber(eq("1234567890"), any(Pageable.class)))
+                    .thenReturn(new PageImpl<>(List.of(record), PageRequest.of(0, 20), 1));
+
+            PagedResponse<com.example.test.dto.response.TransactionRecordResponse> result =
+                    walletService.getTransactionHistory("1234567890", 0, 20);
+
+            assertThat(result.getContent()).hasSize(1);
+            assertThat(result.getPage()).isZero();
+            assertThat(result.getSize()).isEqualTo(20);
+            assertThat(result.getTotalElements()).isEqualTo(1);
+            assertThat(result.getTotalPages()).isEqualTo(1);
+            assertThat(result.isLast()).isTrue();
+            assertThat(result.getContent().get(0).getTransactionRef()).isEqualTo("ref-001");
+        }
+
+        @Test
+        @DisplayName("should return empty paginated response when no transactions exist")
+        void shouldReturnEmptyPagedResponse_whenNoHistory() {
+            Account account = buildAccount("1234567890", BigDecimal.ZERO);
+            when(accountRepository.findByAccountNumber("1234567890"))
+                    .thenReturn(Optional.of(account));
+
+            when(transactionRepository.findByAccountNumber(eq("1234567890"), any(Pageable.class)))
+                    .thenReturn(new PageImpl<>(List.of(), PageRequest.of(0, 20), 0));
+
+            PagedResponse<com.example.test.dto.response.TransactionRecordResponse> result =
+                    walletService.getTransactionHistory("1234567890", 0, 20);
+
+            assertThat(result.getContent()).isEmpty();
+            assertThat(result.getTotalElements()).isZero();
+            assertThat(result.isLast()).isTrue();
+        }
+
+        @Test
+        @DisplayName("should cap page size at 100 when size exceeds limit")
+        void shouldCapPageSize_whenSizeExceedsMax() {
+            Account account = buildAccount("1234567890", BigDecimal.ZERO);
+            when(accountRepository.findByAccountNumber("1234567890"))
+                    .thenReturn(Optional.of(account));
+
+            // Size passed is 999 — service should cap to 100
+            when(transactionRepository.findByAccountNumber(anyString(), any(Pageable.class)))
+                    .thenAnswer(inv -> {
+                        Pageable p = inv.getArgument(1);
+                        assertThat(p.getPageSize()).isEqualTo(100);
+                        return new PageImpl<>(List.of(), p, 0);
+                    });
+
+            walletService.getTransactionHistory("1234567890", 0, 999);
+            // assertion is inside the answer stub above
+        }
+
+        @Test
+        @DisplayName("should throw AccountNotFoundException for unknown account (paginated)")
+        void shouldThrow_whenAccountNotFound_paginated() {
+            when(accountRepository.findByAccountNumber("UNKNOWN"))
+                    .thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> walletService.getTransactionHistory("UNKNOWN", 0, 20))
                     .isInstanceOf(AccountNotFoundException.class)
                     .hasMessageContaining("UNKNOWN");
         }

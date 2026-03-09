@@ -2,6 +2,7 @@ package com.example.test.service.impl;
 
 import com.example.test.dto.request.CreateUserRequest;
 import com.example.test.dto.request.TransferRequest;
+import com.example.test.dto.response.PagedResponse;
 import com.example.test.dto.response.TransactionRecordResponse;
 import com.example.test.dto.response.TransferResponse;
 import com.example.test.dto.response.UserAccountResponse;
@@ -28,6 +29,10 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
+
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 
 @Service
 @Slf4j
@@ -141,23 +146,59 @@ public class WalletServiceImpl implements WalletService {
 
     @Override
     @Transactional(readOnly = true)
+    public PagedResponse<TransactionRecordResponse> getTransactionHistory(
+            String accountNumber, int page, int size) {
+
+        accountRepository.findByAccountNumber(accountNumber)
+                .orElseThrow(() -> new AccountNotFoundException(
+                        "Account not found: " + accountNumber));
+
+        // Cap page size at 100 to prevent oversized queries
+        int cappedSize = Math.min(size, 100);
+
+        PageRequest pageRequest = PageRequest.of(
+                page, cappedSize, Sort.by(Sort.Direction.DESC, "createdAt"));
+
+        Page<TransactionRecord> resultPage =
+                transactionRepository.findByAccountNumber(accountNumber, pageRequest);
+
+        List<TransactionRecordResponse> content = resultPage.getContent().stream()
+                .map(this::toResponse)
+                .collect(Collectors.toList());
+
+        return PagedResponse.<TransactionRecordResponse>builder()
+                .content(content)
+                .page(resultPage.getNumber())
+                .size(resultPage.getSize())
+                .totalElements(resultPage.getTotalElements())
+                .totalPages(resultPage.getTotalPages())
+                .last(resultPage.isLast())
+                .build();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public List<TransactionRecordResponse> getTransactionHistory(String accountNumber) {
         accountRepository.findByAccountNumber(accountNumber)
                 .orElseThrow(() -> new AccountNotFoundException(
                         "Account not found: " + accountNumber));
 
         return transactionRepository.findByAccountNumber(accountNumber).stream()
-                .map(record -> TransactionRecordResponse.builder()
-                        .id(record.getId())
-                        .transactionRef(record.getTransactionRef())
-                        .fromAccount(record.getFromAccountNumber())
-                        .toAccount(record.getToAccountNumber())
-                        .amount(record.getAmount())
-                        .balanceAfterDebit(record.getBalanceAfterDebit())
-                        .status(record.getStatus())
-                        .createdAt(record.getCreatedAt())
-                        .build())
+                .map(this::toResponse)
                 .collect(Collectors.toList());
+    }
+
+    private TransactionRecordResponse toResponse(TransactionRecord record) {
+        return TransactionRecordResponse.builder()
+                .id(record.getId())
+                .transactionRef(record.getTransactionRef())
+                .fromAccount(record.getFromAccountNumber())
+                .toAccount(record.getToAccountNumber())
+                .amount(record.getAmount())
+                .balanceAfterDebit(record.getBalanceAfterDebit())
+                .status(record.getStatus())
+                .createdAt(record.getCreatedAt())
+                .build();
     }
 
     private void validateTransferRequest(TransferRequest request) {
