@@ -303,15 +303,19 @@ curl -X POST http://localhost:9090/api/v1/wallet/users \
 ```bash
 curl -X POST http://localhost:9090/api/v1/wallet/transfers \
   -H "Content-Type: application/json" \
-  -d '{"fromAccount": "3L-XXXXXXXXXX", "toAccount": "3L-YYYYYYYYYY", "amount": 200.00}'
+  -d '{"fromAccount": "1234567890", "toAccount": "0987654321", "amount": 200.00}'
 ```
 
 **Check balance:**
 ```bash
-curl http://localhost:9090/api/v1/wallet/accounts/3L-XXXXXXXXXX/balance
+curl http://localhost:9090/api/v1/wallet/accounts/1234567890/balance
 ```
 
-**View transaction history:**
+**View transaction history (paginated):**
 ```bash
-curl http://localhost:9090/api/v1/wallet/accounts/3L-XXXXXXXXXX/transactions
+# First page, 10 records
+curl "http://localhost:9090/api/v1/wallet/accounts/1234567890/transactions?page=0&size=10"
+
+# Second page
+curl "http://localhost:9090/api/v1/wallet/accounts/1234567890/transactions?page=1&size=10"
 ```

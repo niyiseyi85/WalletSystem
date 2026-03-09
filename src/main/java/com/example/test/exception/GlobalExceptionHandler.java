@@ -1,6 +1,7 @@
 package com.example.test.exception;
 
 import com.example.test.dto.response.ApiResponse;
+import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.validation.FieldError;
@@ -35,6 +36,26 @@ public class GlobalExceptionHandler {
     public ApiResponse<Void> handleInvalidTransferException(InvalidTransferException ex) {
         log.warn("Invalid transfer request: {}", ex.getMessage());
         return ApiResponse.error(ex.getMessage());
+    }
+
+    @ExceptionHandler(ConstraintViolationException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public ApiResponse<Map<String, String>> handleConstraintViolationException(
+            ConstraintViolationException ex) {
+        Map<String, String> errors = new HashMap<>();
+        ex.getConstraintViolations().forEach(cv -> {
+            // path is e.g. "getTransactionHistory.page" — take only the last segment
+            String field = cv.getPropertyPath().toString();
+            int dot = field.lastIndexOf('.');
+            errors.put(dot >= 0 ? field.substring(dot + 1) : field,
+                    cv.getMessage());
+        });
+        log.warn("Constraint violation: {}", errors);
+        return ApiResponse.<Map<String, String>>builder()
+                .success(false)
+                .message("Validation failed")
+                .data(errors)
+                .build();
     }
 
     @ExceptionHandler(DuplicateEmailException.class)
