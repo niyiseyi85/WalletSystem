@@ -16,6 +16,7 @@ import java.time.LocalDateTime;
 public class TransactionRecordResponse {
 
     private Long id;
+    private String transactionRef;
     private String fromAccount;
     private String toAccount;
     private BigDecimal amount;

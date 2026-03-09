@@ -7,6 +7,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
+import java.util.Optional;
 
 @Repository
 @RequiredArgsConstructor
@@ -24,5 +25,15 @@ public class TransactionRepositoryImpl implements TransactionRepository {
         return transactionRecordJpaRepository
                 .findByFromAccountNumberOrToAccountNumberOrderByCreatedAtDesc(
                         accountNumber, accountNumber);
+    }
+
+    @Override
+    public Optional<TransactionRecord> findByTransactionRef(String transactionRef) {
+        return transactionRecordJpaRepository.findByTransactionRef(transactionRef);
+    }
+
+    @Override
+    public boolean existsByTransactionRef(String transactionRef) {
+        return transactionRecordJpaRepository.existsByTransactionRef(transactionRef);
     }
 }

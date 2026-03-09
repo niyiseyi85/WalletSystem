@@ -38,6 +38,9 @@ public class TransactionRecord implements Serializable {
     @Column(nullable = false)
     private TransactionStatus status;
 
+    @Column(nullable = false, unique = true)
+    private String transactionRef;
+
     @Column(nullable = false)
     private LocalDateTime createdAt;
 

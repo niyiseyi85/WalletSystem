@@ -27,7 +27,9 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
 
 @Service
@@ -76,6 +78,20 @@ public class WalletServiceImpl implements WalletService {
     public TransferResponse doTransfer(TransferRequest request) {
         validateTransferRequest(request);
 
+        // Idempotency check — if this transactionRef was already processed, return the cached result
+        Optional<TransactionRecord> existing = transactionRepository.findByTransactionRef(request.getTransactionRef());
+        if (existing.isPresent()) {
+            TransactionRecord cached = existing.get();
+            log.info("Idempotent request for transactionRef [{}] — returning cached result", request.getTransactionRef());
+            return TransferResponse.builder()
+                    .transactionRef(cached.getTransactionRef())
+                    .fromAccount(cached.getFromAccountNumber())
+                    .toAccount(cached.getToAccountNumber())
+                    .amount(cached.getAmount())
+                    .newFromBalance(cached.getBalanceAfterDebit())
+                    .build();
+        }
+
         Account fromAccount = accountRepository.findByAccountNumber(request.getFromAccount())
                 .orElseThrow(() -> new AccountNotFoundException(
                         "Source account not found: " + request.getFromAccount()));
@@ -109,6 +125,7 @@ public class WalletServiceImpl implements WalletService {
 
         // Persist audit record for this transfer
         transactionRepository.save(TransactionRecord.builder()
+                .transactionRef(request.getTransactionRef())
                 .fromAccountNumber(request.getFromAccount())
                 .toAccountNumber(request.getToAccount())
                 .amount(request.getAmount())
@@ -121,6 +138,7 @@ public class WalletServiceImpl implements WalletService {
                 request.getToAccount(), fromBalance.getAmount());
 
         return TransferResponse.builder()
+                .transactionRef(request.getTransactionRef())
                 .fromAccount(request.getFromAccount())
                 .toAccount(request.getToAccount())
                 .amount(request.getAmount())
@@ -151,6 +169,7 @@ public class WalletServiceImpl implements WalletService {
         return transactionRepository.findByAccountNumber(accountNumber).stream()
                 .map(record -> TransactionRecordResponse.builder()
                         .id(record.getId())
+                        .transactionRef(record.getTransactionRef())
                         .fromAccount(record.getFromAccountNumber())
                         .toAccount(record.getToAccountNumber())
                         .amount(record.getAmount())
@@ -171,6 +190,8 @@ public class WalletServiceImpl implements WalletService {
     }
 
     private String generateAccountNumber() {
-        return "3L-" + UUID.randomUUID().toString().replace("-", "").substring(0, 10).toUpperCase();
+        // Generate a unique 10-digit NUBAN-style account number (1000000000 – 9999999999)
+        long number = ThreadLocalRandom.current().nextLong(1_000_000_000L, 10_000_000_000L);
+        return String.valueOf(number);
     }
 }
