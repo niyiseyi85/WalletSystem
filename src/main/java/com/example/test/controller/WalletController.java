@@ -27,10 +27,6 @@ public class WalletController {
 
     private final WalletService walletService;
 
-    /**
-     * POST /api/v1/wallet/users
-     * Creates a new user and generates an account with a zero wallet balance.
-     */
     @PostMapping("/users")
     public ResponseEntity<ApiResponse<UserAccountResponse>> createUser(
             @Valid @RequestBody CreateUserRequest request) {
@@ -42,10 +38,6 @@ public class WalletController {
                 : ResponseEntity.ok(response);
     }
 
-    /**
-     * POST /api/v1/wallet/transfers
-     * Transfers funds between two accounts.
-     */
     @PostMapping("/transfers")
     public ResponseEntity<ApiResponse<TransferResponse>> transfer(
             @Valid @RequestBody TransferRequest request) {
@@ -55,10 +47,6 @@ public class WalletController {
         return ResponseEntity.ok(walletService.doTransfer(request));
     }
 
-    /**
-     * GET /api/v1/wallet/accounts/{accountNumber}/balance
-     * Returns the current balance for an account.
-     */
     @GetMapping("/accounts/{accountNumber}/balance")
     public ResponseEntity<ApiResponse<UserAccountResponse>> getBalance(
             @PathVariable String accountNumber) {
@@ -67,14 +55,6 @@ public class WalletController {
         return ResponseEntity.ok(walletService.getAccountBalance(accountNumber));
     }
 
-    /**
-     * GET /api/v1/wallet/accounts/{accountNumber}/transactions
-     * Returns a paginated page of transaction history, most recent first.
-     *
-     * Query params:
-     *   page  - 0-based page index (default 0)
-     *   size  - records per page (default 20, max 100)
-     */
     @GetMapping("/accounts/{accountNumber}/transactions")
     public ResponseEntity<ApiResponse<PagedResponse<TransactionRecordResponse>>> getTransactionHistory(
             @PathVariable String accountNumber,
