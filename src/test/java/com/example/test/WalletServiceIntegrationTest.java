@@ -221,6 +221,128 @@ class WalletServiceIntegrationTest {
     }
 
     // ─────────────────────────────────────────────
+    // Balance verification during transfer
+    // ─────────────────────────────────────────────
+
+    @Test
+    void shouldDeductExactAmountFromSender_andCreditReceiver() {
+        UserAccountResponse userA = walletService.createUserAndAccount(
+                new CreateUserRequest("exact_a@example.com"));
+        UserAccountResponse userB = walletService.createUserAndAccount(
+                new CreateUserRequest("exact_b@example.com"));
+
+        seedBalance(userA.getAccountNumber(), new BigDecimal("5000.00"));
+
+        walletService.doTransfer(
+                new TransferRequest(userA.getAccountNumber(), userB.getAccountNumber(), new BigDecimal("1500.00")));
+
+        // Sender must have exactly 3500 left
+        assertThat(walletService.getAccountBalance(userA.getAccountNumber()).getBalance())
+                .isEqualByComparingTo(new BigDecimal("3500.00"));
+
+        // Receiver must have exactly 1500
+        assertThat(walletService.getAccountBalance(userB.getAccountNumber()).getBalance())
+                .isEqualByComparingTo(new BigDecimal("1500.00"));
+    }
+
+    @Test
+    void shouldSucceed_whenSenderBalanceExactlyEqualsTransferAmount() {
+        UserAccountResponse userA = walletService.createUserAndAccount(
+                new CreateUserRequest("exact_match_a@example.com"));
+        UserAccountResponse userB = walletService.createUserAndAccount(
+                new CreateUserRequest("exact_match_b@example.com"));
+
+        seedBalance(userA.getAccountNumber(), new BigDecimal("200.00"));
+
+        TransferResponse result = walletService.doTransfer(
+                new TransferRequest(userA.getAccountNumber(), userB.getAccountNumber(), new BigDecimal("200.00")));
+
+        // Sender balance should be exactly zero
+        assertThat(result.getNewFromBalance()).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(walletService.getAccountBalance(userA.getAccountNumber()).getBalance())
+                .isEqualByComparingTo(BigDecimal.ZERO);
+    }
+
+    @Test
+    void shouldThrowInsufficientFunds_whenAmountExceedsBalanceByOneCent() {
+        UserAccountResponse sender = walletService.createUserAndAccount(
+                new CreateUserRequest("one_cent_a@example.com"));
+        UserAccountResponse receiver = walletService.createUserAndAccount(
+                new CreateUserRequest("one_cent_b@example.com"));
+
+        seedBalance(sender.getAccountNumber(), new BigDecimal("100.00"));
+
+        // Attempt to send 100.01 — one cent over the balance
+        assertThatThrownBy(() -> walletService.doTransfer(
+                new TransferRequest(sender.getAccountNumber(), receiver.getAccountNumber(), new BigDecimal("100.01"))))
+                .isInstanceOf(InsufficientFundsException.class)
+                .hasMessageContaining("100.00");  // message shows the available balance
+
+        // Balance must be unchanged after the failed attempt
+        assertThat(walletService.getAccountBalance(sender.getAccountNumber()).getBalance())
+                .isEqualByComparingTo(new BigDecimal("100.00"));
+    }
+
+    @Test
+    void shouldAccumulateBalance_acrossMultipleInboundTransfers() {
+        UserAccountResponse sender1 = walletService.createUserAndAccount(
+                new CreateUserRequest("multi_s1@example.com"));
+        UserAccountResponse sender2 = walletService.createUserAndAccount(
+                new CreateUserRequest("multi_s2@example.com"));
+        UserAccountResponse receiver = walletService.createUserAndAccount(
+                new CreateUserRequest("multi_recv@example.com"));
+
+        seedBalance(sender1.getAccountNumber(), new BigDecimal("1000.00"));
+        seedBalance(sender2.getAccountNumber(), new BigDecimal("1000.00"));
+
+        walletService.doTransfer(
+                new TransferRequest(sender1.getAccountNumber(), receiver.getAccountNumber(), new BigDecimal("300.00")));
+        walletService.doTransfer(
+                new TransferRequest(sender2.getAccountNumber(), receiver.getAccountNumber(), new BigDecimal("200.00")));
+
+        // Receiver should have exactly 500 from both inbound transfers
+        assertThat(walletService.getAccountBalance(receiver.getAccountNumber()).getBalance())
+                .isEqualByComparingTo(new BigDecimal("500.00"));
+
+        // Both transaction records should be in receiver's history
+        List<TransactionRecordResponse> history = walletService.getTransactionHistory(receiver.getAccountNumber());
+        assertThat(history).hasSize(2);
+    }
+
+    @Test
+    void shouldRecordTransactionWithCorrectBalanceAfterDebit() {
+        UserAccountResponse userA = walletService.createUserAndAccount(
+                new CreateUserRequest("audit_a@example.com"));
+        UserAccountResponse userB = walletService.createUserAndAccount(
+                new CreateUserRequest("audit_b@example.com"));
+
+        seedBalance(userA.getAccountNumber(), new BigDecimal("1000.00"));
+
+        walletService.doTransfer(
+                new TransferRequest(userA.getAccountNumber(), userB.getAccountNumber(), new BigDecimal("350.00")));
+
+        List<TransactionRecordResponse> history = walletService.getTransactionHistory(userA.getAccountNumber());
+
+        assertThat(history).hasSize(1);
+        assertThat(history.get(0).getBalanceAfterDebit()).isEqualByComparingTo(new BigDecimal("650.00"));
+        assertThat(history.get(0).getStatus()).isEqualTo(TransactionStatus.SUCCESS);
+        assertThat(history.get(0).getTransactionRef()).isNotBlank();
+        assertThat(history.get(0).getCreatedAt()).isNotNull();
+    }
+
+    // ─────────────────────────────────────────────
+    // Audit timestamps
+    // ─────────────────────────────────────────────
+
+    @Test
+    void shouldPopulateCreatedAtAndUpdatedAt_onAccountCreation() {
+        UserAccountResponse response = walletService.createUserAndAccount(
+                new CreateUserRequest("ts_check@example.com"));
+
+        assertThat(response.getCreatedAt()).isNotNull();
+    }
+
+    // ─────────────────────────────────────────────
     // Test helper
     // ─────────────────────────────────────────────
 
